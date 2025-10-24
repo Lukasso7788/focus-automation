@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+
+# Credentials
+focus-automation-credentials.json
+.env
+
+# Logs
+log.txt
+*.log
