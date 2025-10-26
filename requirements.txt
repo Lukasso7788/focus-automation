@@ -1,5 +1,7 @@
-flask
-gunicorn
+Flask
 gspread
 oauth2client
 requests
+gunicorn
+python-dotenv
+pandas

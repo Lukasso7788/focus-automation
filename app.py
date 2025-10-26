@@ -6,7 +6,9 @@ import requests
 import os
 import json
 import logging
+import csv
 from logging.handlers import RotatingFileHandler
+
 
 # === FLASK ===
 app = Flask(__name__)
@@ -55,6 +57,10 @@ def webhook():
         # Запись в Google Sheets
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([timestamp, user, event])
+
+        with open("events_log.csv", "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([timestamp, user, event])
 
         # Slack-уведомление
         send_slack_message(f"✅ {user} сообщил событие: {event} ({timestamp})")
