@@ -65,6 +65,8 @@ def webhook():
         # Slack-уведомление
         send_slack_message(f"✅ {user} сообщил событие: {event} ({timestamp})")
 
+        send_discord_message(f"📢 {user}: {event} ({timestamp})")
+
         print("📗 Событие сохранено и отправлено в Slack.")
         return jsonify({"status": "success"}), 200
 
@@ -85,6 +87,37 @@ def send_slack_message(text):
     if response.status_code != 200:
         app.logger.warning(f"Slack error {response.status_code}: {response.text}")
         print(f"⚠️ Ошибка Slack: {response.status_code} - {response.text}")
+
+def send_discord_message(text):
+    url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not url:
+        app.logger.warning("No Discord webhook configured")
+        return
+    payload = {"content": text}
+    requests.post(url, json=payload)
+
+def send_telegram_message(text):
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        app.logger.warning("⚠️ Telegram not configured")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    requests.post(url, json={"chat_id": chat_id, "text": text})
+
+
+@app.route('/telegram', methods=['POST'])
+def telegram():
+    try:
+        data = request.get_json(force=True)
+        user = data.get("user")
+        message = data.get("message", "")
+        send_telegram_message(f"📩 {user}: {message}")
+        return jsonify({"status": "sent"}), 200
+    except Exception as e:
+        app.logger.error(f"Telegram endpoint error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 @app.route('/health', methods=['GET'])
