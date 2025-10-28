@@ -103,7 +103,10 @@ def send_telegram_message(text):
         app.logger.warning("⚠️ Telegram not configured")
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": text})
+    payload = {"chat_id": chat_id, "text": text}
+    response = requests.post(url, json=payload)
+    print("📤 Telegram response:", response.status_code, response.text)
+    app.logger.info(f"Telegram response: {response.status_code} {response.text}")
 
 
 @app.route('/telegram', methods=['POST'])
