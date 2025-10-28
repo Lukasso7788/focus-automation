@@ -16,3 +16,13 @@ Built with **Python (Flask, gspread, Slack Webhooks)**
 curl -X POST https://focus-automation.onrender.com/webhook \
   -H "Content-Type: application/json" \
   -d '{"user":"Yaroslav","event":"focus_session_end"}'
+
+🧰 Setup
+
+Clone this repo
+
+Create .env from sample.env and fill in your values
+
+Run locally: python app.py
+
+Deploy easily to Render.com
