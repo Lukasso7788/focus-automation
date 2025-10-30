@@ -1,28 +1,17 @@
-# Flask Automation: Slack + Google Sheets Integration
+🚀 Custom Automation Service (Python + Flask)
+I’ll build a mini backend that connects your app, website, or form to Google Sheets, Slack, Telegram, or Discord —
+with live logging and IP tracking.
 
-**🔥 Offer:**  
-I will build a custom Slack + Google Sheets automation for **$100**  
-Built with **Python (Flask, gspread, Slack Webhooks)**  
+✅ Use cases:
 
-### Features
-✅ Real-time event capture via /webhook  
-✅ Writes to Google Sheets automatically  
-✅ Sends Slack notifications instantly  
-✅ Secure configuration via .env  
-✅ Optional CSV logging for backups  
+New client notifications
 
-### Example Request
-```bash
-curl -X POST https://focus-automation.onrender.com/webhook \
-  -H "Content-Type: application/json" \
-  -d '{"user":"Yaroslav","event":"focus_session_end"}'
+Task / session tracking
 
-🧰 Setup
+Marketing event logging
 
-Clone this repo
+Internal team activity logs
 
-Create .env from sample.env and fill in your values
-
-Run locally: python app.py
-
-Deploy easily to Render.com
+💰 Fixed price: $100
+Delivery: 2–3 days
+Stack: Flask, Google Sheets API, Slack API, Telegram Bot API, Render Cloud
