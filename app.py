@@ -1,3 +1,10 @@
+import sys
+# Windows console UTF-8 (чтобы не было UnicodeEncodeError в PowerShell/ConEmu)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 from flask import Flask, request, jsonify
 from datetime import datetime
 import gspread
@@ -12,15 +19,19 @@ from logging.handlers import RotatingFileHandler
 # === FLASK ===
 app = Flask(__name__)
 
-# === LOGGING ===
+# === LOGGING (log.txt rotation up to 5MB) ===
 handler = RotatingFileHandler("log.txt", maxBytes=5 * 1024 * 1024, backupCount=3)
 handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 app.logger.addHandler(handler)
 
-# === CONFIG ===
+# === CONFIG (from environment) ===
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 SHEET_ID = os.getenv("SHEET_ID")
 SHEET_NAME = os.getenv("SHEET_NAME", "Sheet1")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
@@ -37,65 +48,67 @@ try:
     client = gspread.authorize(creds)
     sheet = client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 except Exception as e:
-    app.logger.error(f"❌ Google Sheets setup error: {e}")
+    app.logger.error(f"Google Sheets setup error: {e}", exc_info=True)
     sheet = None
 
-# === CSV LOGGING ===
+# === UTILS ===
+def client_ip(req) -> str:
+    # На Render/за прокси реальный IP приходит в X-Forwarded-For
+    xff = req.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return req.remote_addr
+
 def log_to_csv(user, event, ip_address, user_agent):
-    """Append events to CSV with rotation if size > 1MB"""
+    """Append events to CSV with простая ротация > 1MB"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_file = "events_log.csv"
+    try:
+        if os.path.exists(log_file) and os.path.getsize(log_file) > 1 * 1024 * 1024:
+            os.rename(log_file, f"events_log_{timestamp.replace(':', '-')}.bak.csv")
+    except Exception as e:
+        app.logger.warning(f"CSV rotation warn: {e}")
+    try:
+        with open(log_file, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([timestamp, user, event, ip_address, user_agent])
+        app.logger.info(f"CSV: {timestamp} | {user} | {event} | {ip_address} | {user_agent}")
+    except Exception as e:
+        app.logger.error(f"CSV write error: {e}", exc_info=True)
 
-    # rotate if >1MB
-    if os.path.exists(log_file) and os.path.getsize(log_file) > 1 * 1024 * 1024:
-        os.rename(log_file, f"events_log_{timestamp.replace(':', '-')}.bak.csv")
-
-    with open(log_file, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([timestamp, user, event, ip_address, user_agent])
-
-    app.logger.info(f"🗒 CSV: {timestamp} | {user} | {event} | {ip_address} | {user_agent}")
-
-# === HELPERS ===
-def send_slack_message(text):
+# === SENDERS ===
+def send_slack_message(text: str):
     if not SLACK_WEBHOOK_URL:
-        app.logger.warning("⚠️ SLACK_WEBHOOK_URL not configured")
-        return
-    try:
-        requests.post(SLACK_WEBHOOK_URL, json={"text": text})
-    except Exception as e:
-        app.logger.error(f"Slack send error: {e}")
-
-def send_discord_message(text):
-    url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not url:
-        app.logger.warning("⚠️ DISCORD_WEBHOOK_URL not configured")
-        return
-    try:
-        requests.post(url, json={"content": text})
-    except Exception as e:
-        app.logger.error(f"Discord send error: {e}")
-
-def send_telegram_message(text):
-    """Отправка сообщения в Telegram с полным логом ответа"""
-    token = os.getenv("TELEGRAM_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        app.logger.warning("⚠️ Telegram not configured (missing TELEGRAM_TOKEN or TELEGRAM_CHAT_ID)")
+        app.logger.warning("SLACK_WEBHOOK_URL not configured")
         return {"ok": False, "error": "not_configured"}
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        try:
-            body = r.json()
-        except Exception:
-            body = r.text
-        app.logger.info(f"📤 Telegram HTTP {r.status_code}: {body}")
+        r = requests.post(SLACK_WEBHOOK_URL, json={"text": text}, timeout=10)
+        return {"ok": r.ok, "status": r.status_code}
+    except Exception as e:
+        app.logger.error(f"Slack send error: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+def send_discord_message(text: str):
+    if not DISCORD_WEBHOOK_URL:
+        app.logger.warning("DISCORD_WEBHOOK_URL not configured")
+        return {"ok": False, "error": "not_configured"}
+    try:
+        r = requests.post(DISCORD_WEBHOOK_URL, json={"content": text}, timeout=10)
+        return {"ok": r.ok, "status": r.status_code}
+    except Exception as e:
+        app.logger.error(f"Discord send error: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+def send_telegram_message(text: str):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        app.logger.warning("Telegram not configured (TELEGRAM_TOKEN or TELEGRAM_CHAT_ID missing)")
+        return {"ok": False, "error": "not_configured"}
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=10)
+        # Telegram часто шлёт JSON-ответ; логируем коротко
+        _ = r.json() if r.headers.get("content-type","").startswith("application/json") else r.text
         r.raise_for_status()
-        return {"ok": True, "status": r.status_code, "body": body}
+        return {"ok": True, "status": r.status_code}
     except Exception as e:
         app.logger.error(f"Telegram send error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
@@ -103,79 +116,76 @@ def send_telegram_message(text):
 # === ROUTES ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Основной эндпоинт — записывает данные в Sheets, CSV и Slack"""
+    """Main webhook — Sheets + CSV + Slack/Discord/Telegram"""
     try:
         data = request.get_json(force=True)
         user = data.get("user")
         event = data.get("event")
-        ip_address = request.remote_addr
+        ip_address = client_ip(request)
         user_agent = request.headers.get("User-Agent", "unknown")
 
         if not user or not event:
             return jsonify({"status": "error", "message": "Invalid JSON"}), 400
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Google Sheets (best-effort)
         if sheet:
-            sheet.append_row([timestamp, user, event, ip_address, user_agent])
+            try:
+                sheet.append_row([timestamp, user, event, ip_address, user_agent])
+            except Exception as e:
+                app.logger.error(f"Sheets append error: {e}", exc_info=True)
 
+        # CSV
         log_to_csv(user, event, ip_address, user_agent)
-        send_slack_message(f"✅ {user} triggered: {event} ({timestamp})")
-        send_discord_message(f"📢 {user}: {event} ({timestamp})")
 
-        return jsonify({"status": "success"}), 200
+        # Unified message to channels
+        msg = f"{user} triggered: {event} at {timestamp}"
+
+        slack_res = send_slack_message(msg)
+        disc_res  = send_discord_message(msg)
+        tg_res    = send_telegram_message(msg)
+
+        return jsonify({
+            "status": "success",
+            "slack": slack_res,
+            "discord": disc_res,
+            "telegram": tg_res
+        }), 200
+
     except Exception as e:
         app.logger.error(f"Webhook error: {e}", exc_info=True)
-        send_slack_message(f"⚠️ Error: {e}")
+        # попытка уведомить Slack об ошибке (если настроен)
+        send_slack_message(f"Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/telegram", methods=["POST"])
-def telegram():
-    """Приём JSON и отправка сообщения в Telegram"""
-    try:
-        data = request.get_json(force=True)
-        user = data.get("user")
-        message = data.get("message", "")
-        ip_address = request.remote_addr
-        user_agent = request.headers.get("User-Agent", "unknown")
-
-        result = send_telegram_message(f"📩 {user}: {message}")
-        log_to_csv(user, message, ip_address, user_agent)
-        return jsonify({"status": "sent", "telegram_result": result}), 200
-    except Exception as e:
-        app.logger.error(f"Telegram endpoint error: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/debug/telegram", methods=["POST"])
-def debug_telegram():
-    """Проверка Telegram-связи и ENV"""
-    token = os.getenv("TELEGRAM_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    masked_token = (token[:10] + "…") if token else None
-    result = send_telegram_message("🔧 Debug ping from Flask app (Render)")
-    return jsonify({
-        "env_seen_by_app": {
-            "TELEGRAM_TOKEN_prefix": masked_token,
-            "TELEGRAM_CHAT_ID": chat_id
-        },
-        "send_result": result
-    }), (200 if result.get("ok") else 500)
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Общая проверка сервиса"""
-    token = os.getenv("TELEGRAM_TOKEN")
+    """Service health check"""
     return jsonify({
         "status": "ok",
         "slack": bool(SLACK_WEBHOOK_URL),
-        "telegram": bool(token),
+        "discord": bool(DISCORD_WEBHOOK_URL),
+        "telegram": bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
         "sheets": bool(sheet)
     }), 200
 
-# === DEBUG PRINT ===
-print("🔍 TELEGRAM_TOKEN (first 10 chars):", str(os.getenv("TELEGRAM_TOKEN"))[:10])
-print("🔍 TELEGRAM_CHAT_ID:", os.getenv("TELEGRAM_CHAT_ID"))
+@app.route("/debug/env", methods=["GET"])
+def debug_env():
+    def mask(v):
+        return (v[:10] + "…") if v else None
+
+    return jsonify({
+        "TELEGRAM_TOKEN_prefix": mask(os.getenv("TELEGRAM_TOKEN")),
+        "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID"),
+        "SLACK_WEBHOOK_URL_set": bool(os.getenv("SLACK_WEBHOOK_URL")),
+        "DISCORD_WEBHOOK_URL_set": bool(os.getenv("DISCORD_WEBHOOK_URL")),
+        "SHEET_ID_set": bool(os.getenv("SHEET_ID")),
+        "GOOGLE_CREDENTIALS_JSON_loaded": bool(os.getenv("GOOGLE_CREDENTIALS_JSON")),
+    }), 200
+
 
 # === MAIN ===
 if __name__ == "__main__":
-    print("✅ Sheets and Slack connected. Server starting...")
+    print("Sheets/Slack/Discord/Telegram pipeline starting...")
     app.run(port=5000, debug=True)
